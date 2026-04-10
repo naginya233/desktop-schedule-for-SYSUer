@@ -1,0 +1,24 @@
+# Node / Vite
+node_modules
+dist
+dist-ssr
+*.local
+.vscode/*
+!.vscode/extensions.json
+
+# Tauri
+src-tauri/target
+src-tauri/gen/
+src-tauri/bin/
+
+# Personal Data / Sensitive Info
+schedule.json
+2025学年度第二学期课程表.doc
+2025学年度第二学期课程表.xml
+schedule_corrected.json
+plan.md
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

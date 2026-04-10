@@ -1,0 +1,29 @@
+{
+  "semester": "202X学年度第X学期课程表",
+  "periods_definition": [
+    { "index": 1, "time": "08:00~08:45" },
+    { "index": 2, "time": "08:55~09:40" },
+    { "index": 3, "time": "10:10~10:55" },
+    { "index": 4, "time": "11:05~11:50" },
+    { "index": 5, "time": "14:20~15:05" }
+  ],
+  "schedule": {
+    "Monday": [
+      {
+        "periods": [1, 2],
+        "content": "1-16每周/某核心必修课/教授A/教室101"
+      }
+    ],
+    "Tuesday": [
+      {
+        "periods": [3, 4],
+        "content": "1-17单周/某专业选修课/教授B/教室202"
+      }
+    ],
+    "Wednesday": [],
+    "Thursday": [],
+    "Friday": [],
+    "Saturday": [],
+    "Sunday": []
+  }
+}
