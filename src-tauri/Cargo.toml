@@ -24,3 +24,18 @@ log = "0.4"
 tauri = { version = "2.10.3", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-autostart = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+base64 = "0.21"
+windows = { version = "0.52", features = [
+    "Media_Control",
+    "Media",
+    "Foundation",
+    "Storage_Streams",
+    "Win32_UI_Shell",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem"
+] }
+tokio = { version = "1", features = ["full"] }

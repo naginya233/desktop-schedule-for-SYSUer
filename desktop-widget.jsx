@@ -149,13 +149,14 @@ function PH({ title, right }) {
 
 function Clock() {
   const now = useClock();
+  const DAY_NAMES = ["周日","周一","周二","周三","周四","周五","周六"];
   return (
     <div className="clk">
       <div className="clk__t">
         {pad(now.getHours())}<span className="clk__c">:</span>{pad(now.getMinutes())}
         <span className="clk__s">{pad(now.getSeconds())}</span>
       </div>
-      <div className="clk__d">{now.getFullYear()}.{pad(now.getMonth()+1)}.{pad(now.getDate())} 周{WK[now.getDay()]}</div>
+      <div className="clk__d">{now.getFullYear()}.{pad(now.getMonth()+1)}.{pad(now.getDate())} {DAY_NAMES[now.getDay()]}</div>
     </div>
   );
 }
@@ -339,38 +340,94 @@ function Courses() {
 function WeekStrip() {
   const { weekData, settings } = useData();
   const td = new Date().getDay() || 7;
-  
+  const now = useClock();
+
+  // Detect container width to switch layouts
+  const wrapRef = useRef(null);
+  const [wide, setWide] = useState(false);
+  useEffect(() => {
+    if (!wrapRef.current) return;
+    const ro = new ResizeObserver(([entry]) => {
+      setWide(entry.contentRect.width >= 520);
+    });
+    ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, []);
+
   const start = new Date(settings?.semesterStart || "2026-03-02");
-  const now = new Date();
-  const currentWeek = Math.floor((now - start) / (7 * 86400000)) + 1;
+  const currentWeek = Math.floor((new Date() - start) / (7 * 86400000)) + 1;
 
   const getWeekCourses = (day) => {
     const list = weekData[day] || [];
     return list.filter(c => {
-      if(!c.weekInfo) return true;
+      if (!c.weekInfo) return true;
       const m = c.weekInfo.match(/^(\d+)-(\d+)(.*)$/);
-      if(m) {
+      if (m) {
         const s = parseInt(m[1]), e = parseInt(m[2]), type = m[3];
-        if(currentWeek < s || currentWeek > e) return false;
-        if(type.includes("双") && currentWeek % 2 !== 0) return false;
-        if(type.includes("单") && currentWeek % 2 === 0) return false;
+        if (currentWeek < s || currentWeek > e) return false;
+        if (type.includes("双") && currentWeek % 2 !== 0) return false;
+        if (type.includes("单") && currentWeek % 2 === 0) return false;
       }
       return true;
     });
   };
 
-  return (
+  const DAYS = [1,2,3,4,5,6,7];
+  const nowM = now.getHours() * 60 + now.getMinutes();
+
+  // ── Compact dot view (narrow) ─────────────────────────────────
+  if (!wide) return (
     <Panel>
       <PH title={`第 ${currentWeek} 周概览`}/>
-      <div className="wk">
-        {[1,2,3,4,5,6,7].map(d=>{
+      <div className="wk" ref={wrapRef}>
+        {DAYS.map(d => {
           const courses = getWeekCourses(d);
           return (
             <div key={d} className={`wk__d ${d===td?"cur":""}`}>
-              <span className="wk__l">周{WK[d]}</span>
+              <span className="wk__l">周{WK[d%7]}</span>
               <div className="wk__ps">
-                {courses.length === 0 ? <div className="wk__empty">·</div> : 
-                  courses.map((s,j)=><div key={j} className="wk__p" style={{background:s.c}} title={`${s.time || s.t} ${s.name || s.n}`}/>)}
+                {courses.length === 0
+                  ? <div className="wk__empty">·</div>
+                  : courses.map((s,j) => (
+                    <div key={j} className="wk__p" style={{background:s.c}}
+                      title={`${s.time||s.t} ${s.name||s.n}`}/>
+                  ))
+                }
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Panel>
+  );
+
+  // ── Full expanded view (wide): same 7-col layout, full course cards ─────
+  return (
+    <Panel>
+      <PH title={`第 ${currentWeek} 周 · 完整课表`}/>
+      <div className="wk wk--full" ref={wrapRef}>
+        {DAYS.map(d => {
+          const courses = getWeekCourses(d);
+          return (
+            <div key={d} className={`wk__d wk__d--full ${d===td?"cur":""}`}>
+              <span className="wk__l">周{WK[d%7]}</span>
+              <div className="wk__ps wk__ps--full">
+                {courses.length === 0
+                  ? <div className="wk__empty">·</div>
+                  : courses.map((c, j) => {
+                    const [sh,sm] = (c.t||"00:00").split(":").map(Number);
+                    const [eh,em] = ((c.time||"").split("-")[1]||"00:00").split(":").map(Number);
+                    const on = nowM >= sh*60+sm && nowM <= eh*60+em && d === td;
+                    return (
+                      <div key={j} className={`wk__fc ${on?"on":""}`}
+                        style={{borderLeftColor: c.c||"var(--ac)"}}>
+                        <span className="wk__fn">{c.name||c.n}</span>
+                        <span className="wk__ft">{c.t||""}</span>
+                        {c.loc && <span className="wk__fl">{c.loc}</span>}
+                      </div>
+                    );
+                  })
+                }
               </div>
             </div>
           );
@@ -431,6 +488,130 @@ function TodoList() {
           <button className="rm" onClick={()=>setTodos(p=>p.filter(x=>x.id!==t.id))}>×</button>
         </div>
       ))}</div>
+    </Panel>
+  );
+}
+
+function Pomodoro() {
+  const [sec, setSec] = useState(25 * 60);
+  const [running, setRunning] = useState(false);
+  const [complete, setComplete] = useState(false);
+  const timerRef = useRef(null);
+
+  useEffect(() => {
+    if (running && sec > 0) {
+      timerRef.current = setInterval(() => setSec(s => s - 1), 1000);
+    } else if (sec === 0) {
+      setRunning(false);
+      setComplete(true);
+    }
+    return () => clearInterval(timerRef.current);
+  }, [running, sec]);
+
+  const toggle = () => {
+    if (complete) reset();
+    else setRunning(!running);
+  };
+  const reset = () => { setRunning(false); setSec(25 * 60); setComplete(false); };
+  const fmt = (s) => `${pad(Math.floor(s / 60))}:${pad(s % 60)}`;
+
+  return (
+    <Panel className={complete ? "p--flash" : ""}>
+      <PH title="番茄钟" right={<button className="gb" onClick={reset}>↺</button>} />
+      <div className="pomo text-center">
+        <div className="pomo__display" onClick={toggle}>
+          <div className="pomo__time">{fmt(sec)}</div>
+          <div className="pomo__status">
+            {complete ? "🎉 已完成！" : running ? "专注于工作中..." : "好的开始是成功的一半"}
+          </div>
+        </div>
+        <button className={`sb ${running ? 'sb--stop' : ''}`} onClick={toggle} style={{ width: '100%', marginTop: 10 }}>
+          {complete ? "再次开启" : running ? "暂停" : "开始专注"}
+        </button>
+      </div>
+    </Panel>
+  );
+}
+
+function Atmosphere() {
+  const [active, setActive] = useState(null);
+  const [vol, setVol] = useState(50);
+  const [music, setMusic] = useState(null);
+  const audioRef = useRef(null);
+
+  useEffect(() => {
+    audioRef.current = new Audio();
+    let unlisten = null;
+    
+    const initListen = async () => {
+      try {
+        if (window.__TAURI__?.event) {
+          unlisten = await window.__TAURI__.event.listen('now-playing', (event) => {
+            setMusic(event.payload);
+          });
+        }
+      } catch (err) {
+        console.error("Failed to setup listener:", err);
+      }
+    };
+    initListen();
+
+    return () => {
+      audioRef.current.pause();
+      audioRef.current = null;
+      if (unlisten) unlisten.then(f => f());
+    };
+  }, []);
+
+  const sounds = [
+    { id: 'rain', name: '深度雨声', icon: '🌧️', url: '/audio/rain.ogg' },
+    { id: 'forest', name: '雷鸣森林', icon: '⛈️', url: '/audio/forest.ogg' },
+    { id: 'cafe', name: '午后书店', icon: '☕', url: '/audio/cafe.ogg' }
+  ];
+
+  const toggle = (s) => {
+    if (!audioRef.current) return;
+    if (active === s.id) {
+      audioRef.current.pause();
+      setActive(null);
+    } else {
+      audioRef.current.src = s.url;
+      audioRef.current.loop = true;
+      audioRef.current.volume = vol / 100;
+      audioRef.current.play().catch(e => console.log("Autoplay blocked", e));
+      setActive(s.id);
+    }
+  };
+
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.volume = vol / 100;
+  }, [vol]);
+
+  return (
+    <Panel>
+      <PH title="氛围感" />
+      <div className="atm">
+        <div className="atm__grid">
+          {sounds.map(s => (
+            <button key={s.id} className={`atm__btn ${active === s.id ? 'on' : ''}`} onClick={() => toggle(s)}>
+              <span className="atm__icon">{s.icon}</span>
+              <span className="atm__name">{s.name}</span>
+            </button>
+          ))}
+        </div>
+        <div className="atm__ctrl">
+          <span style={{ fontSize: 10, opacity:0.6 }}>🔈</span>
+          <input type="range" min="0" max="100" value={vol} onChange={e => setVol(e.target.value)} className="atm__vol" />
+          <span style={{ fontSize: 10, opacity:0.6 }}>🔊</span>
+        </div>
+        <div className="atm__music">
+          <div className={`atm__m-icon ${music?'atm__m-icon--playing':''}`}>{music?'🎵':'🔇'}</div>
+          <div className="atm__m-info">
+            <div className="atm__m-tit">{music ? music.title : "系统媒体未连接"}</div>
+            <div className="atm__m-sub">{music ? music.artist : "等待播放器信号..."}</div>
+          </div>
+        </div>
+      </div>
     </Panel>
   );
 }
@@ -579,47 +760,274 @@ function BackupRestore() {
   );
 }
 
-const COMPS = { Courses, WeekStrip, DDLBoard, Countdowns, TodoList };
-const COMP_LIST = ["Courses", "WeekStrip", "DDLBoard", "Countdowns", "TodoList"];
+
+// ============================================================
+//  TILE REGISTRY
+//  Adding a new tile = calling registerTile() at the bottom of
+//  its component definition. The Layout renders all tiles
+//  automatically; no other changes required.
+//
+//  registerTile({
+//    id       : string          – unique key, used for storage
+//    label    : string          – human-readable title shown on hover menus
+//    icon     : string          – emoji icon
+//    component: React component – the tile's render function
+//    defaultW : number          – default width in px  (default: 300)
+//    defaultH : number|undefined – default height in px (undefined = auto)
+//    defaultPos: { col, row }   – grid hint for initial placement
+//  })
+// ============================================================
+
+const TILE_REGISTRY = new Map(); // id → tile descriptor
+
+function registerTile({ id, label, icon, component, pages, defaultW = 300, defaultH = undefined, defaultPos = { col: 0, row: 0 } }) {
+  TILE_REGISTRY.set(id, { id, label, icon, component, pages, defaultW, defaultH, defaultPos });
+}
+
+/* ---- Tile Pager Component ---- */
+function TilePager({ tileId, pages }) {
+  const { settings, setSettings } = useData();
+  const curIdx = settings?.pageIdx?.[tileId] || 0;
+  const stageRef = useRef(null);
+  const [dragX, setDragX] = useState(0);
+  const [isD, setIsD] = useState(false);
+
+  const setIdx = (i) => {
+    setSettings(p => ({ ...p, pageIdx: { ...(p.pageIdx || {}), [tileId]: i } }));
+  };
+
+  const onMD = (e) => {
+    if (e.target.closest('button, input, textarea, select, a')) return;
+    const startX = e.clientX;
+    setIsD(true);
+    const mm = (ev) => setDragX(ev.clientX - startX);
+    const mu = (ev) => {
+      setIsD(false);
+      const diff = ev.clientX - startX;
+      if (Math.abs(diff) > 50) {
+        if (diff > 0 && curIdx > 0) setIdx(curIdx - 1);
+        else if (diff < 0 && curIdx < pages.length - 1) setIdx(curIdx + 1);
+      }
+      setDragX(0);
+      window.removeEventListener('mousemove', mm);
+      window.removeEventListener('mouseup', mu);
+    };
+    window.addEventListener('mousemove', mm);
+    window.addEventListener('mouseup', mu);
+  };
+
+  const xOffset = -curIdx * 100;
+  const dragOffset = stageRef.current ? (dragX / stageRef.current.offsetWidth) * 100 : 0;
+
+  return (
+    <div className="pg" onMouseDown={onMD}>
+      <div className="pg__stage" ref={stageRef}
+        style={{ 
+          transform: `translateX(${xOffset + dragOffset}%)`,
+          transition: isD ? 'none' : 'transform 0.4s cubic-bezier(0.4, 0, 0.2, 1)'
+        }}>
+        {pages.map((p, i) => (
+          <div key={i} className="pg__page">
+            <p.component />
+          </div>
+        ))}
+      </div>
+      {pages.length > 1 && (
+        <div className="pg__dots">
+          {pages.map((p, i) => (
+            <button key={i} className={`pg__dot ${curIdx===i?'on':''}`} 
+              onClick={(e) => { e.stopPropagation(); setIdx(i); }} title={p.label} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const AppLauncher = () => {
+  const [apps, setApps] = useState(() => {
+    const saved = localStorage.getItem('desktop_apps');
+    return saved ? JSON.parse(saved) : [
+      { name: 'CMD', path: 'cmd.exe' },
+      { name: 'Calc', path: 'calc.exe' }
+    ];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('desktop_apps', JSON.stringify(apps));
+  }, [apps.length]);
+
+  const getTileStyle = (name) => {
+    const colors = [
+      ['#ff5f6d', '#ffc371'], ['#2193b0', '#6dd5ed'], 
+      ['#ee0979', '#ff6a00'], ['#00b09b', '#96c93d'],
+      ['#654ea3', '#eaafc8'], ['#3a1c71', '#ffaf7b']
+    ];
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    const pair = colors[Math.abs(hash) % colors.length];
+    return { background: `linear-gradient(135deg, ${pair[0]}, ${pair[1]})` };
+  };
+
+  const handleLaunch = async (path) => {
+    if (window.__TAURI__) {
+      try {
+        await window.__TAURI__.core.invoke('launch_app', { path });
+      } catch (e) { console.error("Launch failed:", e); }
+    }
+  };
+
+  const handleAdd = async () => {
+    if (window.__TAURI__) {
+      try {
+        const selected = await window.__TAURI__.dialog.open({
+          filters: [{ name: 'Executable', extensions: ['exe', 'lnk'] }]
+        });
+        if (selected) {
+          const name = selected.split(/\\|\//).pop().replace(/\.(exe|lnk)$/i, '');
+          setApps([...apps, { name, path: selected }]);
+        }
+      } catch (e) { console.error("Dialog error:", e); }
+    }
+  };
+
+  return (
+    <Panel>
+      <div className="flex justify-between items-center mb-3 px-1">
+        <span className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: 'var(--tx3)', opacity: 0.6 }}>Launchpad</span>
+        <button onClick={handleAdd} className="w-6 h-6 flex items-center justify-center bg-white/5 hover:bg-white/10 rounded-lg transition-all border-0 outline-none active:scale-90 cursor-pointer">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" style={{ color: 'var(--tx2)' }}><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+      </div>
+      <div className="grid grid-cols-3 gap-y-4 gap-x-2 flex-1 overflow-y-auto pr-1 custom-scrollbar">
+        {apps.map((app, i) => (
+          <button
+            key={i}
+            onClick={() => handleLaunch(app.path)}
+            className="group flex flex-col items-center border-0 outline-none bg-transparent p-0 cursor-pointer"
+            style={{ border: 'none', outline: 'none', background: 'transparent' }}
+          >
+            <div className="w-12 h-12 rounded-[18px] shadow-xl flex items-center justify-center mb-1.5 group-hover:scale-110 group-active:scale-95 transition-all duration-300"
+                 style={{ ...getTileStyle(app.name), border: 'none', boxShadow: '0 10px 20px -5px rgba(0,0,0,0.3)' }}>
+              <span className="text-xl font-black uppercase select-none" style={{ color: '#fff', textShadow: '0 2px 10px rgba(0,0,0,0.3)' }}>
+                {app.name.charAt(0)}
+              </span>
+            </div>
+            <span className="text-[9px] font-bold truncate w-full text-center uppercase tracking-wider transition-all"
+                  style={{ color: 'var(--tx3)' }}>
+              {app.name}
+            </span>
+          </button>
+        ))}
+      </div>
+    </Panel>
+  );
+};
+
+// Build default positions from registry data. Called lazily inside Layout.
+function buildDefaultPos(headerH) {
+  const COLS = [16, 332, 648, 964];
+  const ROW_H = 340;
+  const pos = {};
+  for (const [id, tile] of TILE_REGISTRY) {
+    const col = Math.min(tile.defaultPos.col ?? 0, COLS.length - 1);
+    const row = tile.defaultPos.row ?? 0;
+    pos[id] = { x: COLS[col], y: headerH + 16 + row * ROW_H, w: tile.defaultW, h: tile.defaultH };
+  }
+  return pos;
+}
+
+registerTile({ 
+  id: "CourseSchedule", label: "课程日程", icon: "🗓️", 
+  pages: [
+    { label: "今日课程", component: Courses },
+    { label: "本周概览", component: WeekStrip }
+  ],
+  defaultW: 300, defaultPos: { col: 0, row: 0 } 
+});
+registerTile({ id: "DDLBoard",   label: "截止日期",    icon: "⏰", component: DDLBoard,   defaultW: 300, defaultPos: { col: 2, row: 0 } });
+registerTile({ id: "Countdowns", label: "自定义倒计时", icon: "🎯", component: Countdowns, defaultW: 300, defaultPos: { col: 0, row: 1 } });
+registerTile({ id: "TodoList",   label: "待办事项",    icon: "✅", component: TodoList,   defaultW: 300, defaultPos: { col: 1, row: 1 } });
+registerTile({ id: "Pomodoro",   label: "番茄钟",      icon: "🍅", component: Pomodoro,   defaultW: 240, defaultPos: { col: 2, row: 1 } });
+registerTile({ id: "Atmosphere", label: "氛围感",      icon: "🌊", component: Atmosphere, defaultW: 240, defaultPos: { col: 2, row: 2 } });
+registerTile({ id: "AppLauncher", label: "快速启动", icon: "🚀", component: AppLauncher, defaultW: 240, defaultPos: { col: 1, row: 2 } });
 
 function Layout() {
   const { dark } = useTheme();
   const { settings, setSettings } = useData();
-  const HEADER_H = 130; // approximate header height in px
+  const HEADER_H = 130;
   const p0 = settings?.pos;
-  const pos = p0 || {
-    Courses:    { x: 16,  y: HEADER_H + 16 },
-    WeekStrip:  { x: 332, y: HEADER_H + 16 },
-    DDLBoard:   { x: 648, y: HEADER_H + 16 },
-    Countdowns: { x: 16,  y: HEADER_H + 340 },
-    TodoList:   { x: 332, y: HEADER_H + 340 },
-  };
+
+  // Merge stored positions with registry defaults (new tiles auto-appear)
+  const pos = useMemo(() => {
+    const defaults = buildDefaultPos(HEADER_H);
+    const merged = { ...defaults, ...(p0 || {}) };
+    // Safety: clamp Y above header, fill missing w from registry
+    const out = {};
+    for (const [id, tile] of TILE_REGISTRY) {
+      const stored = merged[id] || defaults[id];
+      out[id] = {
+        ...stored,
+        y: Math.max(HEADER_H, stored.y || 0),
+        w: stored.w || tile.defaultW || 300,
+        h: stored.h,
+      };
+    }
+    return out;
+  }, [p0]);
 
   const containerRef = useRef(null);
   const [active, setActive] = useState(null);
 
-  const startDrag = (e, name) => {
-    if (e.target.closest('button, input, textarea, select, a')) return;
+  const startDrag = (e, id) => {
+    if (e.target.closest('button, input, textarea, select, a, .fc__rsz')) return;
     e.preventDefault();
-    const { x: ox, y: oy } = pos[name] || { x: 0, y: 0 };
+    const { x: ox, y: oy } = pos[id] || { x: 0, y: 0 };
     const sx = e.clientX, sy = e.clientY;
     let nx = ox, ny = oy;
-    setActive(name);
+    setActive(id);
     const el = e.currentTarget.closest('.fc');
     if (el) el.style.zIndex = 100;
 
     const move = (ev) => {
       const c = containerRef.current;
       if (!c || !el) return;
-      nx = Math.max(0, Math.min(ox + ev.clientX - sx, c.clientWidth  - el.offsetWidth));
-      ny = Math.max(0, Math.min(oy + ev.clientY - sy, c.clientHeight - el.offsetHeight));
+      nx = Math.max(0, Math.min(ox + ev.clientX - sx, c.clientWidth - el.offsetWidth));
+      ny = Math.max(HEADER_H, Math.min(oy + ev.clientY - sy, c.clientHeight - el.offsetHeight));
       el.style.left = nx + 'px';
       el.style.top  = ny + 'px';
     };
     const up = () => {
       if (el) el.style.zIndex = '';
       setActive(null);
-      setSettings(p => ({ ...p, pos: { ...(p.pos || pos), [name]: { x: nx, y: ny } } }));
+      setSettings(p => ({ ...p, pos: { ...(p.pos || pos), [id]: { ...(p.pos?.[id] || pos[id]), x: nx, y: ny } } }));
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+
+  const startResize = (e, id) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const el = e.currentTarget.closest('.fc');
+    if (!el) return;
+    const { w: ow, h: oh } = pos[id] || { w: 300 };
+    const currentH = oh || el.offsetHeight;
+    const sx = e.clientX, sy = e.clientY;
+    let nw = ow, nh = currentH;
+    setActive(id);
+
+    const move = (ev) => {
+      nw = Math.max(200, ow + ev.clientX - sx);
+      nh = Math.max(100, currentH + ev.clientY - sy);
+      el.style.width = nw + 'px';
+      el.style.height = nh + 'px';
+    };
+    const up = () => {
+      setActive(null);
+      setSettings(p => ({ ...p, pos: { ...(p.pos || pos), [id]: { ...(p.pos?.[id] || pos[id]), w: nw, h: nh } } }));
       window.removeEventListener('mousemove', move);
       window.removeEventListener('mouseup', up);
     };
@@ -640,17 +1048,19 @@ function Layout() {
         <Summary/>
       </div>
       <div className="freecanvas">
-        {COMP_LIST.map(name => {
-          const Comp = COMPS[name];
-          const p = pos[name] || { x: 0, y: 0 };
+        {[...TILE_REGISTRY.values()].map(tile => {
+          const { id, label, icon, component: Comp, pages } = tile;
+          const p = pos[id] || { x: 0, y: HEADER_H + 16, w: 300 };
           return (
-            <div key={name} className={`fc${active===name?' fc--active':''}`}
-              style={{ left: p.x, top: p.y }}
+            <div key={id} className={`fc${active===id?' fc--active':''}`}
+              style={{ left: p.x, top: p.y, width: p.w, height: p.h || 'auto' }}
             >
-              <div className="fc__handle" onMouseDown={e=>startDrag(e,name)} title="按住拖动">
+              <div className="fc__handle" onMouseDown={e=>startDrag(e,id)} title={`${icon} ${label}`}>
                 <span className="fc__dots">⠿</span>
+                <span className="fc__label">{icon} {label}</span>
               </div>
-              <Comp/>
+              {pages ? <TilePager tileId={id} pages={pages} /> : <Comp />}
+              <div className="fc__rsz" onMouseDown={e=>startResize(e,id)} title="调整大小" />
             </div>
           );
         })}
@@ -773,8 +1183,76 @@ html, body {
   padding:14px 16px;
   box-shadow:var(--shadow);
   transition:background .35s,border-color .35s,box-shadow .25s;
+  display: flex; flex-direction: column;
+  height: 100%; width: 100%;
+  overflow: hidden;
 }
 .p:hover{box-shadow:var(--shadow-hover)}
+
+/* Allow content inside p to scroll if height is fixed */
+.p > *:not(.ph) {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+/* custom scrollbar for cards */
+.p > *:not(.ph)::-webkit-scrollbar { width: 4px; }
+.p > *:not(.ph)::-webkit-scrollbar-thumb { background: var(--bd2); border-radius: 2px; }
+
+/* pager */
+.pg { position: relative; width: 100%; height: 100%; overflow: hidden; display: flex; flex-direction: column; }
+.pg__stage { display: flex; transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1); height: 100%; width: 100%; }
+.pg__page { min-width: 100%; flex-shrink: 0; height: 100%; overflow: hidden; }
+.pg__dots { 
+  display: flex; justify-content: center; gap: 6px; 
+  padding: 4px 10px; border-radius: 10px;
+  position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%);
+  z-index: 5; pointer-events: all;
+  opacity: 0.1; transition: opacity 0.2s;
+  background: var(--card); box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+.pg:hover .pg__dots { opacity: 1; }
+.pg__dot { 
+  width: 6px; height: 6px; border-radius: 3px; border: none; 
+  background: var(--bd2); cursor: pointer; transition: all 0.2s; 
+}
+.pg__dot.on { background: var(--ac); width: 14px; }
+.pg__dot:hover { background: var(--tx3); }
+
+/* pomodoro */
+.pomo { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; padding: 5px 0 10px; }
+.pomo__display { cursor: pointer; text-align: center; width: 100%; padding: 15px 0; border-radius: var(--rs); transition: background 0.2s; }
+.pomo__display:hover { background: rgba(128,128,128,0.05); }
+.pomo__time { font-family: var(--fm); font-size: 48px; font-weight: 500; color: var(--tx); line-height: 1; }
+.pomo__status { font-size: 13px; color: var(--tx2); margin-top: 8px; }
+.sb--stop { background: var(--red) !important; }
+.p--flash { animation: pomo-flash 2.5s infinite ease-in-out; }
+@keyframes pomo-flash { 0% { background: var(--card); } 50% { background: var(--ac); opacity: 0.15; } 100% { background: var(--card); } }
+
+/* atmosphere */
+.atm { display: flex; flex-direction: column; gap: 12px; }
+.atm__grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.atm__btn {
+  display: flex; flex-direction: column; align-items: center; gap: 4px; border: 1px solid var(--bd); 
+  border-radius: var(--rs); background: var(--bg); padding: 8px 0; cursor: pointer; transition: all 0.2s;
+}
+.atm__btn:hover { border-color: var(--ac); background: rgba(128,128,128,0.03); }
+.atm__btn.on { background: rgba(74,127,216,0.08); border-color: var(--ac); }
+.atm__icon { font-size: 18px; }
+.atm__name { font-size: 10px; color: var(--tx2); }
+.atm__btn.on .atm__name { color: var(--ac); font-weight: 500; }
+
+.atm__ctrl { display: flex; align-items: center; gap: 8px; padding: 0 4px; }
+.atm__vol { flex: 1; height: 3px; accent-color: var(--ac); cursor: pointer; }
+
+.atm__music { 
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px; 
+  background: rgba(128,128,128,0.04); border-radius: var(--rs); border: 1px dashed var(--bd);
+}
+.atm__m-icon { font-size: 16px; opacity: 0.5; }
+.atm__m-info { flex: 1; min-width: 0; }
+.atm__m-tit { font-size: 11px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.atm__m-sub { font-size: 9.5px; color: var(--tx3); }
 
 /* panel header */
 .ph{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
@@ -789,23 +1267,36 @@ html, body {
 }
 .fc {
   position: absolute;
-  width: 300px;
   pointer-events: all;
   transition: box-shadow 0.15s;
+  display: flex; flex-direction: column;
+  overflow: hidden;
 }
 .fc--active { z-index: 50 !important; }
 .fc--active .p { box-shadow: 0 8px 32px rgba(0,0,0,0.15), 0 0 0 1.5px var(--ac); }
 
+.fc__rsz {
+  position: absolute; right: 0; bottom: 0; width: 14px; height: 14px;
+  cursor: nwse-resize; opacity: 0; transition: opacity 0.2s;
+  background: linear-gradient(135deg, transparent 50%, var(--tx3) 50%);
+  border-radius: 0 0 var(--rs) 0;
+}
+.fc:hover .fc__rsz { opacity: 0.5; }
+.fc__rsz:hover { opacity: 1 !important; }
+
 /* drag handle on each card */
 .fc__handle {
   display: flex; align-items: center; justify-content: center;
-  height: 14px; margin-bottom: 4px;
-  cursor: grab; opacity: 0; transition: opacity 0.2s;
+  height: 18px; margin-bottom: 2px;
+  cursor: grab; opacity: 0.1; transition: all 0.2s;
   border-radius: var(--rs) var(--rs) 0 0;
+  background: var(--bd);
 }
-.fc:hover .fc__handle { opacity: 1; }
-.fc__handle:active { cursor: grabbing; }
-.fc__dots { font-size: 14px; color: var(--tx3); user-select: none; letter-spacing: 2px; }
+.fc:hover .fc__handle { opacity: 0.8; background: var(--bd2); }
+.fc__handle:active { cursor: grabbing; background: var(--ac); opacity: 1; }
+.fc__dots { font-size: 13px; color: var(--tx2); user-select: none; letter-spacing: 2px; }
+.fc__label { font-size: 11px; color: var(--tx2); user-select: none; margin-left: 6px; opacity: 0; transition: opacity 0.2s; white-space: nowrap; }
+.fc:hover .fc__label { opacity: 1; }
 
 
 /* ===== SHARED CONTROLS ===== */
@@ -834,15 +1325,33 @@ html, body {
 .ci__m{font-size:11px;color:var(--tx3);font-family:var(--fm)}
 .ci__live{font-family:var(--fm);font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--ac);background:rgba(74,127,216,.08);padding:1px 7px;border-radius:4px}
 
-/* week */
+/* week compact */
 .wk{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
 .wk__d{text-align:center;padding:6px 1px 8px;border-radius:var(--rs)}
-.wk__d.cur{background:rgba(74,127,216,.08);box-shadow: inset 0 0 0 1px rgba(74,127,216,0.1)}
-.wk__l{font-size:10px;color:var(--tx3);display:block;margin-bottom:5px;font-weight: 500}
-.wk__ps{display:flex;flex-direction:column;align-items:center;gap:3px;min-height: 20px;justify-content: center}
+.wk__d.cur{background:rgba(74,127,216,.08);box-shadow:inset 0 0 0 1px rgba(74,127,216,0.1)}
+.wk__l{font-size:10px;color:var(--tx3);display:block;margin-bottom:5px;font-weight:500}
+.wk__ps{display:flex;flex-direction:column;align-items:center;gap:3px;min-height:20px;justify-content:center}
 .wk__p{width:6px;height:6px;border-radius:1.5px;transition:transform .15s}
-.wk__p:hover{transform:scale(1.8);z-index: 10}
-.wk__empty{font-size: 10px; color: var(--tx3); opacity: 0.3}
+.wk__p:hover{transform:scale(1.8);z-index:10}
+.wk__empty{font-size:10px;color:var(--tx3);opacity:0.3}
+
+/* week expanded (wide mode) */
+.wk--full{gap:4px}
+.wk__d--full{padding:6px 3px 8px;text-align:left}
+.wk__ps--full{align-items:stretch;gap:4px}
+.wk__fc{
+  border-left:2.5px solid var(--ac);
+  border-radius:0 var(--rs) var(--rs) 0;
+  padding:4px 6px;
+  background:var(--bg);
+  font-size:10px;line-height:1.4;
+  transition:background .15s;
+}
+.wk__fc:hover{background:rgba(128,128,128,.06)}
+.wk__fc.on{background:rgba(74,127,216,.1)}
+.wk__fn{display:block;font-weight:500;font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wk__ft{display:block;color:var(--tx3);font-size:9.5px;font-family:var(--fm)}
+.wk__fl{display:block;color:var(--tx3);font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* ddl */
 .dl{display:flex;flex-direction:column;gap:2px}
