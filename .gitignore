@@ -13,9 +13,12 @@ src-tauri/bin/
 
 # Personal Data / Sensitive Info
 schedule.json
-2025学年度第二学期课程表.doc
-2025学年度第二学期课程表.xml
+2025学年度第二学期*.doc
+2025学年度第二学期*.xml
+学生个人课表_*.xls
 schedule_corrected.json
+output*.json
+1.json
 plan.md
 *.log
 

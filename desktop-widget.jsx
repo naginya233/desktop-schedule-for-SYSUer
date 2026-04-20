@@ -100,6 +100,11 @@ function DataProvider({ children }) {
   const [settings, setSettings] = usePersistedState("widget_settings", { 
     weather: { lat: 39.9042, lon: 116.4074, city: "北京" },
     semesterStart: "2026-03-02",
+    research: {
+      keywords: ["Scene Graph", "Autonomous Driving"],
+      maxResults: 10
+    },
+    hiddenTiles: [],
     cards: [
       { name: "Courses",    x: 16,  y: 16  },
       { name: "WeekStrip",  x: 336, y: 16  },
@@ -150,13 +155,29 @@ function PH({ title, right }) {
 function Clock() {
   const now = useClock();
   const DAY_NAMES = ["周日","周一","周二","周三","周四","周五","周六"];
+  
+  // Robust Lunar Calendar support using formatToParts
+  const lunar = useMemo(() => {
+    try {
+      const parts = new Intl.DateTimeFormat('zh-CN-u-ca-chinese', {
+        month: 'long', day: 'numeric'
+      }).formatToParts(now);
+      const m = parts.find(p => p.type === 'month')?.value || "";
+      const d = parts.find(p => p.type === 'day')?.value || "";
+      return m + d;
+    } catch { return ""; }
+  }, [now.getDate()]); 
+
   return (
     <div className="clk">
       <div className="clk__t">
         {pad(now.getHours())}<span className="clk__c">:</span>{pad(now.getMinutes())}
         <span className="clk__s">{pad(now.getSeconds())}</span>
       </div>
-      <div className="clk__d">{now.getFullYear()}.{pad(now.getMonth()+1)}.{pad(now.getDate())} {DAY_NAMES[now.getDay()]}</div>
+      <div className="clk__d">
+        {now.getFullYear()}.{pad(now.getMonth()+1)}.{pad(now.getDate())} {DAY_NAMES[now.getDay()]}
+        {lunar && <span className="clk__lunar"> {lunar}</span>}
+      </div>
     </div>
   );
 }
@@ -720,38 +741,93 @@ function StickyNotes() {
 
 /* ============ MAIN ============ */
 function BackupRestore() {
-  const { courses, setCourses, weekData, setWeekData, ddl, setDdl, todo, setTodo, countdown, setCountdown, notes, setNotes } = useData();
-  const exportData = () => {
-    const data = { courses, weekData, ddl, todo, countdown, notes };
-    const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = `widget-backup-${new Date().toISOString().slice(0,10)}.json`;
-    a.click(); URL.revokeObjectURL(url);
+  const { settings, setSettings, courses, setCourses, weekData, setWeekData, ddl, setDdl, todo, setTodo, countdown, setCountdown, notes, setNotes } = useData();
+  
+  const exportData = async () => {
+    if (!window.__TAURI__) {
+      // Fallback for browser (might not work well in Tauri)
+      const data = { settings, courses, weekData, ddl, todo, countdown, notes };
+      const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `widget-backup.json`;
+      a.click(); URL.revokeObjectURL(url);
+      return;
+    }
+
+    try {
+      const { save } = window.__TAURI__.dialog;
+      const { writeTextFile } = window.__TAURI__.fs;
+      
+      const path = await save({
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+        defaultPath: `widget-backup-${new Date().toISOString().slice(0,10)}.json`
+      });
+
+      if (path) {
+        const data = { settings, courses, weekData, ddl, todo, countdown, notes };
+        await writeTextFile(path, JSON.stringify(data, null, 2));
+        alert("备份成功！");
+      }
+    } catch (e) {
+      console.error("Backup failed:", e);
+      alert("备份失败，请检查控制台");
+    }
   };
-  const importData = () => {
-    const input = document.createElement("input");
-    input.type = "file"; input.accept = ".json";
-    input.onchange = e => {
-      const file = e.target.files[0];
-      if(!file) return;
-      const reader = new FileReader();
-      reader.onload = ev => {
-        try {
-          const data = JSON.parse(ev.target.result);
-          if (data.courses) setCourses(data.courses);
-          if (data.weekData) setWeekData(data.weekData);
-          if (data.ddl) setDdl(data.ddl);
-          if (data.todo) setTodo(data.todo);
-          if (data.countdown) setCountdown(data.countdown);
-          if (data.notes) setNotes(data.notes);
-          alert("导入成功！");
-        } catch { alert("数据格式错误"); }
+
+  const importData = async () => {
+    if (!window.__TAURI__) {
+      const input = document.createElement("input");
+      input.type = "file"; input.accept = ".json";
+      input.onchange = e => {
+        const file = e.target.files[0];
+        const reader = new FileReader();
+        reader.onload = ev => {
+          try {
+            const data = JSON.parse(ev.target.result);
+            if (data.settings) setSettings(data.settings);
+            if (data.courses) setCourses(data.courses);
+            if (data.weekData) setWeekData(data.weekData);
+            if (data.ddl) setDdl(data.ddl);
+            if (data.todo) setTodo(data.todo);
+            if (data.countdown) setCountdown(data.countdown);
+            if (data.notes) setNotes(data.notes);
+            alert("导入成功！");
+          } catch { alert("数据格式错误"); }
+        };
+        reader.readAsText(file);
       };
-      reader.readAsText(file);
-    };
-    input.click();
+      input.click();
+      return;
+    }
+
+    try {
+      const { open } = window.__TAURI__.dialog;
+      const { readTextFile } = window.__TAURI__.fs;
+      
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: 'JSON', extensions: ['json'] }]
+      });
+
+      if (selected) {
+        const content = await readTextFile(selected);
+        const data = JSON.parse(content);
+        if (data.settings) setSettings(data.settings);
+        if (data.courses) setCourses(data.courses);
+        if (data.weekData) setWeekData(data.weekData);
+        if (data.ddl) setDdl(data.ddl);
+        if (data.todo) setTodo(data.todo);
+        if (data.countdown) setCountdown(data.countdown);
+        if (data.notes) setNotes(data.notes);
+        alert("导入成功！");
+      }
+    } catch (e) {
+      console.error("Import failed:", e);
+      alert("导入失败");
+    }
   };
+
   return (
     <div style={{display:"flex",gap:4}}>
       <button className="gb" onClick={exportData} title="导出备份" style={{padding:"2px 6px"}}>📤</button>
@@ -840,6 +916,45 @@ function TilePager({ tileId, pages }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function TileManagerBtn() {
+  const { setSettings } = useData();
+  return (
+    <button className="gb" onClick={() => setSettings(p => ({ ...p, showTileManager: true }))} title="管理磁贴" style={{ padding: "2px 6px" }}>🧱</button>
+  );
+}
+
+function TileManagerModal() {
+  const { settings, setSettings } = useData();
+  const hidden = settings?.hiddenTiles || [];
+  const toggle = (id) => {
+    const next = hidden.includes(id) ? hidden.filter(x => x !== id) : [...hidden, id];
+    setSettings(p => ({ ...p, hiddenTiles: next }));
+  };
+
+  return (
+    <div className="tm-modal" onClick={() => setSettings(p => ({ ...p, showTileManager: false }))}>
+      <div className="tm-card" onClick={e => e.stopPropagation()}>
+        <div className="tm-head"><h3>磁贴展示管理</h3><button onClick={() => setSettings(p => ({ ...p, showTileManager: false }))}>×</button></div>
+        <div className="tm-list">
+          {[...TILE_REGISTRY.values()].map(tile => {
+            const isOff = hidden.includes(tile.id);
+            return (
+              <div key={tile.id} className={`tm-item ${isOff ? 'off' : ''}`} onClick={() => toggle(tile.id)}>
+                <div className="tm-item__info">
+                  <span className="tm-item__icon">{tile.icon}</span>
+                  <span className="tm-item__label">{tile.label}</span>
+                </div>
+                <div className="tm-switch"><div className="tm-switch__knob" /></div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="tm-foot">隐藏组件不会丢失数据，仅在桌面不可见</div>
+      </div>
     </div>
   );
 }
@@ -951,6 +1066,306 @@ registerTile({ id: "TodoList",   label: "待办事项",    icon: "✅", componen
 registerTile({ id: "Pomodoro",   label: "番茄钟",      icon: "🍅", component: Pomodoro,   defaultW: 240, defaultPos: { col: 2, row: 1 } });
 registerTile({ id: "Atmosphere", label: "氛围感",      icon: "🌊", component: Atmosphere, defaultW: 240, defaultPos: { col: 2, row: 2 } });
 registerTile({ id: "AppLauncher", label: "快速启动", icon: "🚀", component: AppLauncher, defaultW: 240, defaultPos: { col: 1, row: 2 } });
+registerTile({ id: "BEVHUD", label: "自动驾驶幻境", icon: "🛸", component: BEVHUD, defaultW: 300, defaultH: 300, defaultPos: { col: 3, row: 1 } });
+registerTile({ 
+  id: "ResearchFeed", label: "科研动态", icon: "🧬", 
+  pages: [
+    { label: "最新论文", component: ResearchFeed },
+    { label: "订阅配置", component: ResearchSettings }
+  ],
+  defaultW: 340, defaultH: 420, defaultPos: { col: 3, row: 0 } 
+});
+
+function ResearchFeed() {
+  const { settings } = useData();
+  const [papers, setPapers] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const fetchLock = useRef(false);
+
+  const keywords = useMemo(() => 
+    settings?.research?.keywords || ["Scene Graph", "Autonomous Driving"], 
+    [settings?.research?.keywords]
+  );
+
+  const fetchArxiv = useCallback(async () => {
+    if (fetchLock.current) return;
+    fetchLock.current = true;
+    setLoading(true);
+    setError(null);
+    try {
+      if (!keywords || keywords.length === 0) {
+        setPapers([]);
+        return;
+      }
+      
+      const q = keywords.map(k => `abs:"${k.trim()}"`).join("+OR+");
+      const baseUrl = `https://export.arxiv.org/api/query?search_query=${q}&sortBy=submittedDate&sortOrder=descending&max_results=${settings?.research?.maxResults || 10}`;
+      
+      let text = "";
+      
+      // Aggressive Tauri API detection
+      const tauri = window.__TAURI__ || window.__TAURI_INTERNALS__;
+      const invoker = tauri?.core?.invoke || tauri?.invoke;
+
+      if (invoker) {
+        try {
+          text = await invoker('fetch_url', { url: baseUrl });
+        } catch (e) {
+          console.error("[ArXiv] Native fetch failed:", e);
+        }
+      }
+
+      if (!text) {
+        // Fallback: Using a different, usually more stable proxy
+        const response = await fetch(`https://corsproxy.io/?${encodeURIComponent(baseUrl)}`);
+        text = await response.text();
+      }
+
+      if (!text || text.includes("Oops...") || text.includes("Timeout")) throw new Error("获取内容失败或服务器繁忙");
+
+      // Handle Base64 wrapper if proxy returned it (safeguard)
+      if (text.startsWith("data:")) {
+        try {
+          const b64 = text.split(",")[1];
+          text = new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0)));
+        } catch (e) { console.error("[ArXiv] B64 decode error:", e); }
+      }
+
+      const parser = new DOMParser();
+      const xml = parser.parseFromString(text.trim(), "text/xml");
+      
+      const parseError = xml.getElementsByTagName("parsererror");
+      if (parseError.length > 0) throw new Error("XML 解析失败");
+
+      const entries = Array.from(xml.getElementsByTagName("entry"));
+
+      const parsed = entries.map(entry => {
+        const getTagContent = (tagName) => entry.getElementsByTagName(tagName)[0]?.textContent || "";
+        const getLink = (rel) => {
+          const links = Array.from(entry.getElementsByTagName("link"));
+          const target = links.find(l => l.getAttribute("title") === rel || l.getAttribute("type") === "application/pdf") ;
+          return target?.getAttribute("href") || links[0]?.getAttribute("href");
+        };
+
+        return {
+          id: getTagContent("id"),
+          title: getTagContent("title").replace(/\n/g, " ").trim(),
+          summary: getTagContent("summary").replace(/\n/g, " ").trim().substring(0, 150) + "...",
+          authors: Array.from(entry.getElementsByTagName("author")).map(a => a.getElementsByTagName("name")[0]?.textContent).join(", "),
+          link: getLink("pdf"),
+          published: new Date(getTagContent("published")).toLocaleDateString()
+        };
+      });
+      setPapers(parsed);
+    } catch (e) {
+      console.error("[ArXiv] Fetch Error:", e);
+      setError(e.message);
+    } finally {
+      setLoading(false);
+      fetchLock.current = false;
+    }
+  }, [keywords, settings?.research?.maxResults]);
+
+  useEffect(() => { fetchArxiv(); }, [fetchArxiv]);
+
+  return (
+    <Panel>
+      <PH title="科研动态" right={<button className="gb" onClick={fetchArxiv}>{loading ? "..." : "刷新"}</button>} />
+      <div className="rsf">
+        {loading && papers.length === 0 && <div className="rsf__msg">正在同步 arXiv 数据库...</div>}
+        {error && <div className="rsf__msg" style={{color:'var(--red)'}}>❌ 出错了: {error}<br/><small style={{fontSize:9}}>请检查调试控制台 (F12)</small></div>}
+        {!loading && !error && papers.length === 0 && <div className="rsf__msg">未发现相关动态，请检查订阅关键词。</div>}
+        {papers.map((p, i) => (
+          <a key={i} href={p.link} target="_blank" rel="noopener noreferrer" className="paper">
+            <div className="paper__t">{p.title}</div>
+            <div className="paper__a">{p.authors}</div>
+            <div className="paper__s">{p.summary}</div>
+            <div className="paper__f">
+              <span className="paper__d">{p.published}</span>
+              <span className="paper__tag">arXiv</span>
+            </div>
+          </a>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function BEVHUD() {
+  const canvasRef = useRef(null);
+  const { dark } = useTheme();
+  const { settings } = useData();
+  const weather = settings?.weather?.city; // Basic trigger for weather-based visuals
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    let frameId;
+
+    // Simulation Data
+    const lanes = [{ x: 50 }, { x: 150 }, { x: 250 }];
+    let laneOffset = 0;
+    const obstacles = [
+      { id: 1, x: 140, y: 50, w: 20, h: 36, speed: 1.2, color: '#4a7fd8' },
+      { id: 2, x: 60, y: 180, w: 18, h: 32, speed: 0.8, color: '#3ba868' }
+    ];
+    const particles = Array.from({ length: 40 }, () => ({
+      x: Math.random() * 300, y: Math.random() * 300, s: Math.random() * 2 + 1
+    }));
+
+    const draw = () => {
+      ctx.clearRect(0, 0, 300, 300);
+      const accent = dark ? '#6a9de8' : '#4a7fd8';
+      const secondary = dark ? '#a0a098' : '#9c9c96';
+      const bg = dark ? '#191918' : '#f4f3ef';
+
+      // 1. Draw Grid / Lanes
+      laneOffset = (laneOffset + 2) % 60;
+      ctx.strokeStyle = dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
+      ctx.setLineDash([20, 40]);
+      lanes.forEach(l => {
+        ctx.beginPath();
+        ctx.moveTo(l.x, 0);
+        ctx.lineTo(l.x, 300);
+        ctx.stroke();
+      });
+      ctx.setLineDash([]);
+
+      // 2. Draw Ego car (Static Center)
+      ctx.fillStyle = accent;
+      ctx.beginPath();
+      // Round rect for car
+      const r = 4;
+      ctx.moveTo(140 + r, 240);
+      ctx.lineTo(160 - r, 240);
+      ctx.quadraticCurveTo(160, 240, 160, 240 + r);
+      ctx.lineTo(160, 276 - r);
+      ctx.quadraticCurveTo(160, 276, 160 - r, 276);
+      ctx.lineTo(140 + r, 276);
+      ctx.quadraticCurveTo(140, 276, 140, 276 - r);
+      ctx.lineTo(140, 240 + r);
+      ctx.quadraticCurveTo(140, 240, 140 + r, 240);
+      ctx.fill();
+      
+      // Ego highlight
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // 3. Draw perception boxes (Obstacles)
+      obstacles.forEach(o => {
+        o.y += o.speed;
+        if (o.y > 320) {
+          o.y = -50;
+          o.x = lanes[Math.floor(Math.random() * 3)].x - 10;
+        }
+        
+        // Draw box
+        ctx.fillStyle = `${o.color}33`; // Alpha
+        ctx.strokeStyle = o.color;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(o.x, o.y, o.w, o.h);
+        ctx.fillRect(o.x, o.y, o.w, o.h);
+
+        // Draw relationship lines (Scene Graph Mock)
+        if (Math.abs(o.y - 150) < 50) {
+          ctx.beginPath();
+          ctx.strokeStyle = 'rgba(212,138,59,0.3)';
+          ctx.moveTo(150, 258);
+          ctx.lineTo(o.x + 10, o.y + o.h/2);
+          ctx.stroke();
+          // tag
+          ctx.fillStyle = 'rgba(212,138,59,0.6)';
+          ctx.font = '8px monospace';
+          ctx.fillText('IN_ZONE', (150 + o.x)/2 + 10, (258 + o.y)/2);
+        }
+      });
+
+      // 4. Radar Noise (The "Vibe")
+      ctx.fillStyle = dark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
+      particles.forEach(p => {
+        p.y = (p.y + p.s) % 300;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      // 5. HUD overlay text
+      ctx.fillStyle = secondary;
+      ctx.font = '9px monospace';
+      ctx.fillText('SENSOR: ACTIVE', 10, 20);
+      ctx.fillText(`OBJS: ${obstacles.length}`, 10, 32);
+      ctx.fillText(`FPS: 30`, 10, 44);
+
+      frameId = requestAnimationFrame(draw);
+    };
+
+    draw();
+    return () => cancelAnimationFrame(frameId);
+  }, [dark]);
+
+  return (
+    <Panel style={{ padding: 0, position: 'relative' }}>
+      <PH title="自动驾驶幻境" style={{ position: 'absolute', top: 14, left: 16, zIndex: 10, pointerEvents: 'none' }} />
+      <canvas ref={canvasRef} width="300" height="300" style={{ display: 'block', width: '100%', height: '100%' }} />
+      <div className="bev__overlay">
+        <span className="bev__tag">EGO_STATUS: NOMINAL</span>
+      </div>
+    </Panel>
+  );
+}
+function ResearchSettings() {
+  const { settings, setSettings } = useData();
+  const [input, setInput] = useState("");
+  const keywords = settings?.research?.keywords || [];
+
+  const add = () => {
+    if (!input.trim() || keywords.includes(input.trim())) return;
+    setSettings(p => ({
+      ...p,
+      research: { ...p.research, keywords: [...keywords, input.trim()] }
+    }));
+    setInput("");
+  };
+
+  const remove = (k) => {
+    setSettings(p => ({
+      ...p,
+      research: { ...p.research, keywords: keywords.filter(x => x !== k) }
+    }));
+  };
+
+  return (
+    <Panel>
+      <PH title="订阅配置" />
+      <div className="ti" style={{ marginBottom: 10 }}>
+        <input 
+          placeholder="输入 arXiv 关键词并回车..." 
+          value={input} 
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && add()}
+        />
+      </div>
+      <div className="rt" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+        <div className="rt__l" style={{ fontSize: 11, marginBottom: 8, opacity: 0.7 }}>当前关注领域：</div>
+        <div className="rt__tags" style={{ flex: 1, overflowY: 'auto', alignContent: 'flex-start' }}>
+          {keywords.map(k => (
+            <span key={k} className="rt__tag">
+              {k}
+              <button onClick={() => remove(k)}>×</button>
+            </span>
+          ))}
+          {keywords.length === 0 && <div style={{fontSize:11, color:'var(--tx3)', padding: '10px 0'}}>暂无订阅，请添加关键词</div>}
+        </div>
+        <div style={{marginTop:12, pt: 8, borderTop: '1px dashed var(--bd)', fontSize: 10, color:'var(--tx3)', lineHeight: 1.4, opacity: 0.8}}>
+          💡 建议使用 "Scene Graph" 等精准词组。支持多项订阅，系统将自动汇总最新动态。
+        </div>
+      </div>
+    </Panel>
+  );
+}
 
 function Layout() {
   const { dark } = useTheme();
@@ -1043,12 +1458,19 @@ function Layout() {
       <div className="widget-header">
         <div className="topbar">
           <div className="topbar__l"><Clock/><Weather/></div>
-          <div className="topbar__r"><Hito/><BackupRestore/><ThemeToggle/></div>
+          <Hito/>
+          <div className="topbar__r">
+            <BackupRestore/>
+            <TileManagerBtn />
+            <ThemeToggle/>
+          </div>
         </div>
         <Summary/>
       </div>
       <div className="freecanvas">
-        {[...TILE_REGISTRY.values()].map(tile => {
+        {[...TILE_REGISTRY.values()]
+          .filter(tile => !settings?.hiddenTiles?.includes(tile.id))
+          .map(tile => {
           const { id, label, icon, component: Comp, pages } = tile;
           const p = pos[id] || { x: 0, y: HEADER_H + 16, w: 300 };
           return (
@@ -1066,6 +1488,7 @@ function Layout() {
         })}
       </div>
       <StickyNotes/>
+      {settings?.showTileManager && <TileManagerModal />}
     </div>
   );
 }
@@ -1132,12 +1555,24 @@ html, body {
 .clk__t{font-family:var(--fm);font-size:40px;font-weight:500;letter-spacing:-1px;line-height:1}
 .clk__c{opacity:.2}
 .clk__s{font-size:15px;color:var(--tx3);margin-left:2px;vertical-align:top;line-height:40px}
-.clk__d{font-size:12px;color:var(--tx2);margin-top:2px}
+.clk__d{font-size:12px;color:var(--tx2);margin-top:2px;display:flex;align-items:center}
+.clk__lunar{font-size:10px;color:var(--ac);background:rgba(74,127,216,0.1);padding:0px 5px;border-radius:4px;margin-left:8px;font-weight:600;letter-spacing:0.5px}
 
 /* hito */
-.hito{max-width:340px;font-size:12px;color:var(--tx2);line-height:1.7;cursor:pointer;text-align:right;transition:color .2s}
-.hito:hover{color:var(--tx)}
-.hito__f{display:block;font-size:11px;color:var(--tx3);margin-top:1px}
+.hito{
+  flex: 1; 
+  padding: 0 20px;
+  max-width: 500px;
+  font-size: 12px;
+  color: var(--tx2);
+  line-height: 1.6;
+  cursor: pointer;
+  text-align: center;
+  transition: color 0.2s;
+  opacity: 0.85;
+}
+.hito:hover{color:var(--tx); opacity: 1;}
+.hito__f{display:inline-block;font-size:11px;color:var(--tx3);margin-left:8px}
 
 /* weather */
 .wt{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2)}
@@ -1411,10 +1846,81 @@ html, body {
 .col:nth-child(2) .p:nth-child(2){animation-delay:.12s}
 .col:nth-child(3) .p:nth-child(1){animation-delay:.15s}
 
+/* research feed */
+.rsf { display: flex; flex-direction: column; gap: 8px; }
+.rsf__msg { text-align: center; padding: 20px 0; color: var(--tx3); font-size: 12px; }
+.paper { 
+  display: block; text-decoration: none; color: inherit; 
+  padding: 12px; border-radius: var(--rs); background: var(--bg);
+  border: 1px solid transparent; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.paper:hover { 
+  background: var(--card); border-color: var(--ac); 
+  transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); 
+}
+.paper__t { font-size: 13px; font-weight: 600; line-height: 1.4; color: var(--tx); margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.paper__a { font-size: 11px; color: var(--tx2); margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.paper__s { font-size: 11px; color: var(--tx3); line-height: 1.5; margin-bottom: 8px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.paper__f { display: flex; justify-content: space-between; align-items: center; }
+.paper__d { font-size: 10px; color: var(--tx3); font-family: var(--fm); }
+.paper__tag { font-size: 9px; font-weight: 700; color: var(--ac); background: rgba(74,127,216,0.1); padding: 1px 6px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+/* research settings */
+.rt { display: flex; flex-direction: column; gap: 10px; }
+.rt__l { font-size: 12px; font-weight: 500; color: var(--tx2); }
+.rt__tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.rt__tag { 
+  display: flex; align-items: center; gap: 4px; padding: 3px 8px; 
+  background: var(--bg); border: 1px solid var(--bd); border-radius: 6px; 
+  font-size: 11px; color: var(--tx); 
+}
+.rt__tag button { 
+  background: none; border: none; font-size: 14px; color: var(--tx3); 
+  cursor: pointer; padding: 0; line-height: 1; 
+}
+.rt__tag button:hover { color: var(--red); }
+
+/* BEV HUD */
+.bev__overlay { position: absolute; bottom: 12px; right: 12px; pointer-events: none; }
+.bev__tag { 
+  font-family: var(--fm); font-size: 8px; color: var(--ac); 
+  background: rgba(74,127,216,0.1); padding: 2px 6px; border-radius: 4px; 
+  letter-spacing: 0.5px; text-transform: uppercase;
+}
+
 /* responsive */
 @media(max-width:860px){.grid{grid-template-columns:1fr}.topbar{flex-direction:column;align-items:flex-start;gap:10px}.topbar__r{align-self:flex-end}}
       `}</style>
       <Layout />
+      <style>{`
+/* Tile Manager */
+.tm-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.3); backdrop-filter: blur(25px); z-index: 99999; display: flex; align-items: center; justify-content: center; animation: tm-fade 0.3s ease; }
+@keyframes tm-fade { from { opacity: 0; } to { opacity: 1; } }
+.tm-card { 
+  background: var(--card); border: 1px solid var(--bd2); border-radius: 24px; width: 320px; 
+  box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden; 
+  animation: tm-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  backdrop-filter: blur(40px);
+}
+@keyframes tm-pop { from { transform: scale(0.9) translateY(20px); opacity: 0; } to { transform: scale(1) translateY(0); opacity: 1; } }
+.tm-head { padding: 20px 24px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--bd); background: rgba(128,128,128,0.03); }
+.tm-head h3 { font-size: 16px; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase; }
+.tm-head button { background: var(--bd); border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border: none; font-size: 18px; color: var(--tx2); cursor: pointer; transition: all 0.2s; }
+.tm-head button:hover { background: var(--bd2); transform: rotate(90deg); }
+.tm-list { padding: 12px; max-height: min(480px, 60vh); overflow-y: auto; display: grid; grid-template-columns: 1fr; gap: 4px; }
+.tm-item { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-radius: 14px; cursor: pointer; transition: all 0.2s ease; border: 1px solid transparent; }
+.tm-item:hover { background: rgba(128,128,128,0.06); border-color: var(--bd); transform: translateX(2px); }
+.tm-item.off { opacity: 0.6; grayscale: 0.5; }
+.tm-item__info { display: flex; align-items: center; gap: 12px; }
+.tm-item__icon { font-size: 18px; background: rgba(128,128,128,0.08); width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 10px; }
+.tm-item__label { font-size: 13.5px; font-weight: 600; color: var(--tx); }
+.tm-switch { width: 38px; height: 20px; border-radius: 10px; background: linear-gradient(135deg, #4a7fd8, #6a9de8); position: relative; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: inset 0 2px 4px rgba(0,0,0,0.1); }
+.tm-item.off .tm-switch { background: var(--bd2); box-shadow: none; }
+.tm-switch__knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 8px; background: white; transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+.tm-item.off .tm-switch__knob { transform: translateX(0); }
+.tm-item:not(.off) .tm-switch__knob { transform: translateX(18px); }
+.tm-foot { padding: 14px; font-size: 11px; color: var(--tx3); text-align: center; border-top: 1px solid var(--bd); font-weight: 500; opacity: 0.7; }
+      `}</style>
       </DataProvider>
     </ThemeProvider>
   );

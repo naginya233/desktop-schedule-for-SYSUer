@@ -26,6 +26,7 @@ tauri-plugin-log = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
 base64 = "0.21"
 windows = { version = "0.52", features = [
     "Media_Control",
@@ -38,4 +39,5 @@ windows = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem"
 ] }
+reqwest = { version = "0.12", features = ["blocking", "json"] }
 tokio = { version = "1", features = ["full"] }
