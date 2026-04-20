@@ -93,6 +93,7 @@ function useData() { return useContext(DataCtx); }
 function DataProvider({ children }) {
   const [courses, setCourses] = usePersistedState("widget_courses", COURSES);
   const [weekData, setWeekData] = usePersistedState("widget_week", WEEK_DATA);
+  const [partnerWeekData, setPartnerWeekData] = usePersistedState("widget_week_partner", {});
   const [ddl, setDdl] = usePersistedState("widget_ddl", INIT_DDL);
   const [todo, setTodo] = usePersistedState("widget_todo", INIT_TODO);
   const [countdown, setCountdown] = usePersistedState("widget_countdowns", [{id:1,label:"期末考试",date:"2026-06-20",emoji:"📖"}]);
@@ -111,10 +112,20 @@ function DataProvider({ children }) {
       { name: "DDLBoard",   x: 656, y: 16  },
       { name: "Countdowns", x: 16,  y: 320 },
       { name: "TodoList",   x: 336, y: 320 },
+      { name: "FreeTime",   x: 656, y: 320 },
     ]
   });
   return (
-    <DataCtx.Provider value={{ courses, setCourses, weekData, setWeekData, ddl, setDdl, todo, setTodo, countdown, setCountdown, notes, setNotes, settings, setSettings }}>
+    <DataCtx.Provider value={{ 
+      courses, setCourses, 
+      weekData, setWeekData, 
+      partnerWeekData, setPartnerWeekData,
+      ddl, setDdl, 
+      todo, setTodo, 
+      countdown, setCountdown, 
+      notes, setNotes, 
+      settings, setSettings 
+    }}>
       {children}
     </DataCtx.Provider>
   );
@@ -273,9 +284,9 @@ function Courses() {
   const now = useClock();
   const m = now.getHours()*60+now.getMinutes();
   const todayCourses = useTodayCourses();
-  const { setWeekData } = useData();
+  const { setWeekData, setPartnerWeekData } = useData();
 
-  const handleImport = () => {
+  const handleImport = (target = 'me') => {
     const input = document.createElement("input");
     input.type = "file"; input.accept = ".json";
     input.onchange = e => {
@@ -309,20 +320,21 @@ function Courses() {
                    const teacher = parts[2] || "";
                    let loc = parts[3] || "";
                    loc = loc.replace(/\(.*?座\).*/, '');
-                   // Join the last two segments if there are multiple hyphens (e.g. 深圳校区-西教学楼-西2-403 => 西2-403)
                    loc = loc.split('-').slice(-2).join('-');
                    loc = loc.replace(/^工学园/, '工');
                    
                    newWeekData[dayNum].push({
                       t: tStart, time: timeStr, name: name, n: name,
                       c: colors[cid++ % colors.length], loc: loc,
-                      weekInfo: weekInfo, teacher: teacher
+                      weekInfo: weekInfo, teacher: teacher,
+                      periods: item.periods
                    });
                 });
              });
              for(let i=1; i<=7; i++) newWeekData[i].sort((a,b) => a.t.localeCompare(b.t));
-             setWeekData(newWeekData);
-             alert("教务系统课表导入成功！");
+             if (target === 'me') setWeekData(newWeekData);
+             else setPartnerWeekData(newWeekData);
+             alert(`${target === 'me' ? '我的' : '对象的'}课表导入成功！`);
           } else {
              alert("请选择正确的教务系统课表 JSON 文件");
           }
@@ -335,7 +347,12 @@ function Courses() {
 
   return (
     <Panel>
-      <PH title="今日课程" right={<button className="gb" onClick={handleImport}>导入</button>} />
+      <PH title="今日课程" right={
+        <div style={{display:'flex', gap:4}}>
+          <button className="gb" onClick={() => handleImport('me')}>导入</button>
+          <button className="gb" onClick={() => handleImport('partner')} title="导入对象课表">❤️</button>
+        </div>
+      } />
       <div className="cl">
         {todayCourses.length === 0 && <div style={{fontSize:12,color:"var(--tx3)",textAlign:"center",padding:"10px 0"}}>今天没有课~</div>}
         {todayCourses.map((c,i)=>{
@@ -632,6 +649,80 @@ function Atmosphere() {
             <div className="atm__m-sub">{music ? music.artist : "等待播放器信号..."}</div>
           </div>
         </div>
+      </div>
+    </Panel>
+  );
+}
+
+function FreeTime() {
+  const { weekData, partnerWeekData, settings } = useData();
+  const todayNum = new Date().getDay() || 7;
+  const start = new Date(settings?.semesterStart || "2026-03-02");
+  const currentWeek = Math.floor((new Date() - start) / (7 * 86400000)) + 1;
+
+  const getOccupiedPeriods = (data) => {
+    const list = data[todayNum] || [];
+    const periods = new Set();
+    list.forEach(c => {
+      let active = true;
+      if (c.weekInfo) {
+        const m = c.weekInfo.match(/^(\d+)-(\d+)(.*)$/);
+        if (m) {
+          const s = parseInt(m[1]), e = parseInt(m[2]), type = m[3];
+          if (currentWeek < s || currentWeek > e) active = false;
+          if (type.includes("双") && currentWeek % 2 !== 0) active = false;
+          if (type.includes("单") && currentWeek % 2 === 0) active = false;
+        }
+      }
+      if (active && c.periods) {
+        c.periods.forEach(p => periods.add(p));
+      }
+    });
+    return periods;
+  };
+
+  const myOccupied = getOccupiedPeriods(weekData);
+  const partnerOccupied = getOccupiedPeriods(partnerWeekData);
+
+  const periods = [
+    { id: 1,  name: "1",  time: "08:00-08:45" },
+    { id: 2,  name: "2",  time: "08:55-09:40" },
+    { id: 3,  name: "3",  time: "10:10-10:55" },
+    { id: 4,  name: "4",  time: "11:05-11:50" },
+    { id: 5,  name: "5",  time: "14:20-15:05" },
+    { id: 6,  name: "6",  time: "15:15-16:00" },
+    { id: 7,  name: "7",  time: "16:30-17:15" },
+    { id: 8,  name: "8",  time: "17:25-18:10" },
+    { id: 9,  name: "9",  time: "19:00-19:45" },
+    { id: 10, name: "10", time: "19:55-20:40" },
+    { id: 11, name: "11", time: "20:50-21:35" },
+  ];
+
+  const commonFree = periods.filter(p => !myOccupied.has(p.id) && !partnerOccupied.has(p.id));
+
+  // Determine if partner data exists
+  const hasPartner = Object.keys(partnerWeekData).length > 0;
+
+  return (
+    <Panel>
+      <PH title="共同空闲" right={hasPartner ? "❤️ 已连接" : <span style={{fontSize:10, opacity:0.5}}>未导入对方课表</span>} />
+      <div className="ft">
+        {!hasPartner ? (
+          <div style={{fontSize:12, color:"var(--tx3)", textAlign:"center", padding:"20px 0"}}>
+            点击课程面板的 ❤️ 导入对方课表<br/>即可查看共同空闲时间
+          </div>
+        ) : commonFree.length === 0 ? (
+          <div style={{fontSize:12, color:"var(--tx3)", textAlign:"center", padding:"20px 0"}}>今天没有重合的空闲时间 😭</div>
+        ) : (
+          <div className="ft__list">
+            {commonFree.map(p => (
+              <div key={p.id} className="ft__item">
+                <span className="ft__p">第{p.name}节</span>
+                <span className="ft__t">{p.time}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </Panel>
   );
@@ -1067,6 +1158,7 @@ registerTile({ id: "Pomodoro",   label: "番茄钟",      icon: "🍅", componen
 registerTile({ id: "Atmosphere", label: "氛围感",      icon: "🌊", component: Atmosphere, defaultW: 240, defaultPos: { col: 2, row: 2 } });
 registerTile({ id: "AppLauncher", label: "快速启动", icon: "🚀", component: AppLauncher, defaultW: 240, defaultPos: { col: 1, row: 2 } });
 registerTile({ id: "BEVHUD", label: "自动驾驶幻境", icon: "🛸", component: BEVHUD, defaultW: 300, defaultH: 300, defaultPos: { col: 3, row: 1 } });
+registerTile({ id: "FreeTime", label: "共同空闲", icon: "❤️", component: FreeTime, defaultW: 300, defaultPos: { col: 2, row: 2 } });
 registerTile({ 
   id: "ResearchFeed", label: "科研动态", icon: "🧬", 
   pages: [
@@ -1887,6 +1979,18 @@ html, body {
   background: rgba(74,127,216,0.1); padding: 2px 6px; border-radius: 4px; 
   letter-spacing: 0.5px; text-transform: uppercase;
 }
+
+/* common free time */
+.ft { display: flex; flex-direction: column; gap: 8px; justify-content: center; height: 100%; }
+.ft__list { display: flex; flex-direction: column; gap: 4px; }
+.ft__item { 
+  display: flex; align-items: center; justify-content: space-between; 
+  padding: 8px 12px; background: var(--bg); border-radius: var(--rs);
+  border: 1px solid var(--bd); transition: all 0.2s;
+}
+.ft__item:hover { border-color: var(--ac); background: var(--card); transform: translateX(2px); }
+.ft__p { font-size: 11px; font-weight: 600; color: var(--tx); }
+.ft__t { font-size: 11px; color: var(--tx3); font-family: var(--fm); }
 
 /* responsive */
 @media(max-width:860px){.grid{grid-template-columns:1fr}.topbar{flex-direction:column;align-items:flex-start;gap:10px}.topbar__r{align-self:flex-end}}
